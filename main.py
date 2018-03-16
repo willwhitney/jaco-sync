@@ -34,7 +34,7 @@ fullwidth = width * 2
 action_spec = env.action_spec()
 time_step = env.reset()
 
-action = np.zeros([6])
+action = np.zeros([9])
 time_step = env.step(action)
 
 def move_target_to_hand():
@@ -42,6 +42,8 @@ def move_target_to_hand():
 
 def move_mocap_to_hand():
   env.physics.named.data.mocap_pos['endpoint'] = env.physics.named.data.xpos['jaco_link_hand']
+
+
 
 # def zero_mocap_offset():
 #   env.physics.named.model.eq_data['weld'].fill(0)
@@ -56,39 +58,51 @@ def render():
     cv2.imshow('arm', pixel)
     cv2.waitKey(10)
 
+def get_jaco_angles():
+    pos = kinova.get_angular_position()
+    angles = [a for a in pos.Actuators] + [a for a in pos.Fingers]
+    return angles
+
+def move_mujoco_to_real():
+    angles = get_jaco_angles()
+    env.physics.named.data.qpos[:9] = real_to_sim(angles)
+
 gears = env.physics.model.actuator_gear[:, 0]
 
 # where the robot has to be (in kinova coordinates)
 # to be at zero in mujoco
-zero_offset = np.array([-180, 270, 90, 180, 180, -90])
-directions = np.array([-1, 1, -1, -1, -1, -1])
+zero_offset = np.array([-180, 270, 90, 180, 180, -90, 0, 0, 0])
+
+# correct for the different physical directions of a +theta
+# movement between mujoco
+directions = np.array([-1, 1, -1, -1, -1, -1, 1, 1, 1])
+
+# correct for the degrees -> radians shift going from arm
+# to mujoco
+scales = np.array([math.pi / 180] * 6 + [0.78 / 6800] * 3)
+
+def real_to_sim(angles):
+    return (angles - zero_offset) * directions * scales
 
 kinova.start()
 
-controls = np.array(env.physics.named.data.qpos[:6])
+# controls = np.array(env.physics.named.data.qpos[:6])
 print('starting position: ')
-print(env.physics.named.data.qpos[:6])
-controls[0] = 0
+print(env.physics.named.data.qpos[:9])
+# controls[0] = 0
 
-env.physics.named.data.qpos[0] = 1
-while not time_step.last():
+move_mujoco_to_real()
+while True:
     for i in range(100):
-        pos = kinova.get_angular_position()
-        # ipdb.set_trace()
-        angles = pos.Actuators
-        angles = [a for a in angles]
-        # print(angles)
-        # for i, angle in enumerate(angles):
-        #       # print(i)
-        # print(env.physics.named.data.qpos[:6])
-        #     env.physics.named.data.qpos[i] = angle
-        # env.step(controls)
-        env.step((angles - zero_offset) * directions * math.pi / 180 * gears)
-        # env.step(np.zeros(6) * gears)
-        print(env.physics.named.data.qpos[:6])
-        # env.physics.data.ctrl[:] = [100, 0,0,0,0,0]
-        # print("")
-        # time_step = env.step(action)
+        angles = get_jaco_angles()
+
+        env.step(real_to_sim(angles) * gears)
+        print(env.physics.named.data.qpos[:9])
+
+        # sometimes mujoco flips out and resets the sim's angles to all zeros
+        if np.allclose(np.zeros(9), env.physics.named.data.qpos[:9]):
+            move_mujoco_to_real()
+
         render()
 
     # import ipdb; ipdb.set_trace()
